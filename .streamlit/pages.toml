@@ -1,0 +1,9 @@
+[[pages]]
+name = "Overview"
+icon = "🏠"
+is_section = true
+
+[[pages]]
+path = "app_pages/home.py"
+name = "Home"
+icon = "📊"

@@ -1,0 +1,8 @@
+[theme]
+primaryColor="#6C63FF"
+backgroundColor="#F4F6FB"
+secondaryBackgroundColor="#E4E9F5"
+textColor="#3B4563"
+
+[global]
+disableWidgetStateDuplicationWarning = true
