@@ -1,8 +1,8 @@
 [theme]
-primaryColor="#6C63FF"
-backgroundColor="#F4F6FB"
-secondaryBackgroundColor="#E4E9F5"
-textColor="#3B4563"
+primaryColor="#7C5CBF"
+backgroundColor="#F2EFFC"
+secondaryBackgroundColor="#E4DEFA"
+textColor="#2A1A5E"
 
 [global]
 disableWidgetStateDuplicationWarning = true

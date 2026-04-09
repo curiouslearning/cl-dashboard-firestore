@@ -20,8 +20,8 @@ footer {{
     width: 100%;
     text-align: center;
     padding: 5px;
-    background-color: #FFE8D8;
-    color: #2D1810;
+    background-color: #E4DEFA;
+    color: #2A1A5E;
     font-size: 0.9em;
 }}
 </style>

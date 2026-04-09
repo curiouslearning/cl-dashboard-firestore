@@ -2,32 +2,32 @@
 # 🎨 Global Color Configuration
 # -----------------------------
 
-# Base pastel palette — Sunset Ember
+# Base palette — Lavender Dusk
 PALETTE = {
-    "ember":   "#FFCBA4",   # warm coral-peach
-    "coral":   "#FFB38A",   # mid coral
-    "blaze":   "#FF9B71",   # deeper orange
-    "sand":    "#FFF3E8",   # lightest cream (matches bg)
-    "clay":    "#F5E0D0",   # muted terracotta
-    "dusk":    "#E8C4A8",   # warm taupe
+    "lavender": "#E4DEFA",   # light violet (secondary bg)
+    "lilac":    "#CFC6F5",   # mid lavender
+    "violet":   "#B8ACEE",   # deeper violet
+    "dusk":     "#F2EFFC",   # lightest (matches bg)
+    "plum":     "#9B85D4",   # muted plum
+    "ink":      "#D6D0F0",   # cool lavender-grey
 }
 
 # Metric display names used in the CHART (from long_df["metric_display"])
 CHART_METRIC_COLORS = {
-    "Max Level Reached":        PALETTE["ember"],
-    "Number of Sessions":       PALETTE["blaze"],
-    "Total Play Time (min)":    PALETTE["coral"],
-    "Avg Session Length (min)": PALETTE["clay"],
-    "Active Span (days)":       PALETTE["dusk"],
-    "Days to RA":               PALETTE["sand"],
+    "Max Level Reached":        PALETTE["lavender"],
+    "Number of Sessions":       PALETTE["lilac"],
+    "Total Play Time (min)":    PALETTE["violet"],
+    "Avg Session Length (min)": PALETTE["plum"],
+    "Active Span (days)":       PALETTE["ink"],
+    "Days to RA":               PALETTE["dusk"],
 }
 
 # Engagement metric names used in TILES (from get_engagement_metrics)
 TILE_METRIC_COLORS = {
-    "Avg Level Reached":          PALETTE["ember"],
-    "Avg # Sessions / User":      PALETTE["blaze"],
-    "Avg Total Play Time / User": PALETTE["coral"],
-    "Avg Session Length / User":  PALETTE["clay"],
-    "Active Span / User":         PALETTE["dusk"],
-    "Avg Days to RA":             PALETTE["sand"],
+    "Avg Level Reached":          PALETTE["lavender"],
+    "Avg # Sessions / User":      PALETTE["lilac"],
+    "Avg Total Play Time / User": PALETTE["violet"],
+    "Avg Session Length / User":  PALETTE["plum"],
+    "Active Span / User":         PALETTE["ink"],
+    "Avg Days to RA":             PALETTE["dusk"],
 }
