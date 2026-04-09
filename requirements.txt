@@ -1,0 +1,24 @@
+# ================================
+# CL Dashboard - Firestore
+# ================================
+
+# --- Core dashboard stack ---
+streamlit
+pandas
+numpy
+plotly
+beautifulsoup4
+
+# --- Google Cloud ecosystem ---
+google-auth
+google-api-core
+google-cloud-core
+google-cloud-secret-manager
+
+# --- gRPC / protobuf ---
+grpcio
+grpcio-status
+protobuf
+
+# --- Utilities ---
+requests
