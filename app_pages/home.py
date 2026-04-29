@@ -72,8 +72,18 @@ st.plotly_chart(fig_lang, width="stretch")
 # (test data artifact in Firestore); those points fall outside the visible range
 st.subheader("Score Distribution", divider="violet")
 
+lang_options = sorted(df["lang"].dropna().unique().tolist())
+selected_langs = st.multiselect(
+    "Filter by language",
+    options=lang_options,
+    default=lang_options,
+    key="score_dist_langs",
+)
+
+dist_df = df[df["lang"].isin(selected_langs)] if selected_langs else df.iloc[0:0]
+
 # Clip to just below 1.0 so perfect scores land in the 95-100% bin, not an overflow bin
-scored = df["score_pct"].dropna().clip(upper=0.99999)
+scored = dist_df["score_pct"].dropna().clip(upper=0.99999)
 
 fig_hist = px.histogram(
     scored,
@@ -94,7 +104,7 @@ fig_hist.update_layout(
     showlegend=False,
 )
 st.plotly_chart(fig_hist, width="stretch")
-st.caption(f"{len(scored):,} of {total_sessions:,} sessions have a recorded score")
+st.caption(f"{len(scored):,} of {len(dist_df):,} sessions have a recorded score")
 
 # -- Chart 3: Avg Score % by Language -----------------------------------------
 st.subheader("Avg Score % by Language", divider="violet")
