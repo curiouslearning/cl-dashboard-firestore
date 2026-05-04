@@ -29,8 +29,9 @@ main.py                        # Entry point — set_page_config, navigation, fo
 settings.py                    # GCP credentials, initialize(), get_logger()
 data.py                        # Data loading, flattening, session state init
 colors.py                      # Global color palette (Lavender Dusk theme)
+ui.py                          # CSS injection + HTML tile / section-header renderers
 app_pages/
-home.py                      # Home page — summary tiles + sessions by user
+home.py                      # Home page — summary tiles + assessment charts
 .streamlit/
 config.toml                  # Theme configuration
 pages.toml                   # Navigation structure
@@ -100,7 +101,12 @@ since `SELECT * ` preserves the original Firestore column name.
 }
 ```
 
-# Flattened columns in `df_assessment_sessions`
+# Flattened columns in `df_assessments`
+
+Each row = one completed assessment. `activity_type` tells you which one
+(`letter-sounds` or `sight-words`). The dashboard uses "assessment" everywhere
+in user-facing text and internal keys; "session" survives only in upstream
+resource names (`user_sessions_data_raw_latest`, `assessment_sessions_*.parquet`).
 
 | Column | Source | Notes |
 |--- | --- | ---|
@@ -139,14 +145,14 @@ Call this at the top of every page before accessing session state.
 initialize()
 ensure_data_initialized()
 
-df = st.session_state["df_assessment_sessions"]
+df = st.session_state["df_assessments"]
 ```
 
 # Session state keys
 
 | Key | Content |
 |--- | ---|
-| `df_assessment_sessions` | Fully flattened assessment sessions DataFrame |
+| `df_assessments` | Fully flattened assessments DataFrame (one row = one completed assessment) |
 | `data_initialized` | Boolean guard — prevents double loading |
 
 ---
@@ -172,7 +178,7 @@ The service account needs:
 1. Create `app_pages/your_page.py`
 2. Add an entry to `.streamlit/pages.toml`
 3. Call `initialize()` and `ensure_data_initialized()` at the top
-4. Access data via `st.session_state["df_assessment_sessions"]`
+4. Access data via `st.session_state["df_assessments"]`
 
 ```toml
 [[pages]]

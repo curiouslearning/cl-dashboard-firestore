@@ -35,7 +35,8 @@ def load_parquet_from_gcs(file_pattern: str) -> pd.DataFrame:
     return df
 
 
-def load_assessment_sessions_from_gcs() -> pd.DataFrame:
+def load_assessments_from_gcs() -> pd.DataFrame:
+    # GCS export prefix is still "assessment_sessions_*" — external resource, not renamed.
     return load_parquet_from_gcs(
         "user_data_parquet_cache/assessment_sessions_*.parquet"
     )
@@ -133,12 +134,12 @@ def init_data():
         return
 
     with st.spinner("Loading assessment data...", show_time=True):
-        df_raw = load_assessment_sessions_from_gcs()
+        df_raw = load_assessments_from_gcs()
 
         if df_raw.empty:
-            raise ValueError("Assessment sessions table returned no rows.")
+            raise ValueError("Assessments table returned no rows.")
 
         df_assessment = flatten_assessment_df(df_raw)
 
-        st.session_state["df_assessment_sessions"] = df_assessment
+        st.session_state["df_assessments"] = df_assessment
         st.session_state["data_initialized"] = True
