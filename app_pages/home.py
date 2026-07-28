@@ -3,12 +3,12 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from settings import initialize
-from data import ensure_data_initialized
+from data import ensure_assessment_data_initialized
 from colors import PALETTE
 import ui
 
 initialize()
-ensure_data_initialized()
+ensure_assessment_data_initialized()
 ui.inject_css()
 
 df = st.session_state["df_assessments"]

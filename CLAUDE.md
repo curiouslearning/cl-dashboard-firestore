@@ -137,23 +137,36 @@ resource names (`user_sessions_data_raw_latest`, `assessment_sessions_*.parquet`
 
 # Data Loading Pattern
 
-All data loads once at startup via `ensure_data_initialized()`.
-Call this at the top of every page before accessing session state.
+**Each app's data loads independently.** A page loads only the dataset it needs,
+via that dataset's own `ensure_*_data_initialized()` guard — pages are decoupled,
+so navigating to one app's page never loads another's, and a load failure in one
+dataset never blocks another page. Call the relevant guard at the top of the page
+before accessing session state.
 
 ```python
-
+# Assessment page
 initialize()
-ensure_data_initialized()
-
+ensure_assessment_data_initialized()
 df = st.session_state["df_assessments"]
+
+# Feed the Monster page
+initialize()
+ensure_ftm_data_initialized()
+df = st.session_state["df_ftm"]        # may be empty (feed is pre-launch in prod)
 ```
+
+Both guards delegate to the shared `_guard_init(init_fn, flag_key, label)` helper
+in `data.py`, which runs the loader once per session and wraps failures in
+`st.error` + `st.stop()`.
 
 # Session state keys
 
 | Key | Content |
 |--- | ---|
-| `df_assessments` | Fully flattened assessments DataFrame (one row = one completed assessment) |
-| `data_initialized` | Boolean guard — prevents double loading |
+| `df_assessments` | Flattened assessments DataFrame (one row = one completed assessment) |
+| `assessment_data_initialized` | Boolean guard for the assessment loader |
+| `df_ftm` | Flattened Feed the Monster summary DataFrame (may be empty) |
+| `ftm_data_initialized` | Boolean guard for the FTM loader |
 
 ---
 
@@ -177,8 +190,9 @@ The service account needs:
 
 1. Create `app_pages/your_page.py`
 2. Add an entry to `.streamlit/pages.toml`
-3. Call `initialize()` and `ensure_data_initialized()` at the top
-4. Access data via `st.session_state["df_assessments"]`
+3. Call `initialize()` and the relevant `ensure_*_data_initialized()` at the top
+   (or add a new per-app loader + guard in `data.py` for a new dataset)
+4. Access data via the matching `st.session_state["df_*"]` key
 
 ```toml
 [[pages]]
