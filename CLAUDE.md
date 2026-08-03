@@ -28,10 +28,11 @@ Data originates from **Firestore**, is exported to ** BigQuery**, cached as
 main.py                        # Entry point — set_page_config, navigation, footer
 settings.py                    # GCP credentials, initialize(), get_logger()
 data.py                        # Data loading, flattening, session state init
-colors.py                      # Global color palette (Lavender Dusk theme)
-ui.py                          # CSS injection + HTML tile / section-header renderers
+colors.py                      # Global color palette (Lavender Dusk theme) + FUNNEL_COLORS
+ui.py                          # CSS injection + tile / section-header / funnel renderers
 app_pages/
-home.py                      # Home page — summary tiles + assessment charts
+assessments.py               # Assessment summary — tiles + assessment charts
+ftm.py                       # Feed the Monster — tiles + milestone funnels + scatter
 .streamlit/
 config.toml                  # Theme configuration
 pages.toml                   # Navigation structure
@@ -49,6 +50,11 @@ textColor = "#2A1A5E"   # deep violet
 ```
 
 Palette keys in `colors.py`: `lavender`, `lilac`, `violet`, `dusk`, `plum`, `ink`
+
+`PALETTE` is deliberately pale — fine for tiles and chart marks that sit on the
+background. Funnel stages carry their labels *inside* the bars, so they use the
+darker `FUNNEL_COLORS` ramp instead (dark → focal → dark, mirroring the olive
+ramp in cl-dashboard-internal's `create_engagement_figure`).
 
 Use `divider = "violet"` in `st.subheader()` to match the theme.
 
@@ -177,9 +183,12 @@ in `data.py`, which runs the loader once per session and wraps failures in
 # Feed the Monster page scope
 
 The FTM page filters to `firestore_timestamp >= 2026-07-29` (earlier rows
-predate the full summary field set) and `environment == "production"`. Both
-`df_ftm` and `df_ftm_events` get the identical filter so milestone counts and
-summary counts describe the same population.
+predate the full summary field set) and `environment == "production"` (drops
+test and environment-less rows). Apply the identical filter to any dataset added
+to this page, so every number describes the same population.
+
+Page sections: summary tiles → milestone funnels → volume-vs-success scatter →
+field completeness.
 
 # Ad-optimization milestones
 
@@ -189,13 +198,24 @@ collection is not exported to BigQuery. `begin_play` and the four `play_*`
 thresholds are genuinely cross-app events, so the FTM-only versions are lower
 bounds.
 
-Seven of the nine are shown. `play_sessions_3` and `habit_4_days_week` are
-deliberately omitted: the event log carries no app-launch event (only
-`puzzle_completed` and `level_completed`), so sessions can only be reconstructed
-from a 30-minute inactivity gap, and a rolling 7-day habit window needs more
-history than the page's start date allows. Both become straightforward once
-`user_profiles` is exported. `data.py` keeps the event-log loader ready for
-that work.
+Seven of the nine are shown, as **two side-by-side funnels** — level progress
+and play time — because the milestones are independent thresholds on two tracks,
+not nested stages. Interleaved they do not taper (`ftm_level_25` sits below
+`play_10_min`); split by track, each is monotonic in spec order and Plotly's
+"% of previous" reads as a real step-down. `begin_play` heads both as the shared
+baseline and is 100% by construction — every user in the frame has an FTM
+summary record.
+
+Milestones are per install, so roll up per `cr_user_id` (`max` level, `sum`
+seconds) before thresholding — some users have more than one summary doc and
+must not count twice.
+
+`play_sessions_3` and `habit_4_days_week` are deliberately omitted: the event log
+carries no app-launch event (only `puzzle_completed` and `level_completed`), so
+sessions can only be reconstructed from a 30-minute inactivity gap, and a rolling
+7-day habit window needs more history than the page's start date allows. Both
+become straightforward once `user_profiles` is exported. `data.py` keeps the
+event-log loader ready for that work.
 
 ---
 
@@ -241,3 +261,11 @@ icon = "📊"
 - ` % -d` for day formatting(no leading zero) — Mac/Linux only
 use `%  # d` on Windows
 - Use `PALETTE` dict from `colors.py` for all chart and tile colors
+  (`FUNNEL_COLORS` for funnel stages)
+- Render summary tiles with `ui.tile_row(specs)` — one responsive CSS grid that
+  wraps on narrow windows. Do **not** put tiles in `st.columns`: fixed columns
+  squeeze until the text breaks mid-word and spills out of the tile.
+- Render funnels with `ui.funnel_figure(labels, values)`. It does not sort —
+  pass stages already in descending order, or the funnel will not taper.
+- Avoid charts with one row (or one user) per category: the FTM page had two,
+  and at ~450 users they rendered ~12,000px tall. Aggregate or bin instead.
