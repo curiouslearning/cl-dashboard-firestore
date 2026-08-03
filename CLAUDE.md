@@ -152,7 +152,11 @@ df = st.session_state["df_assessments"]
 # Feed the Monster page
 initialize()
 ensure_ftm_data_initialized()
-df = st.session_state["df_ftm"]        # may be empty (feed is pre-launch in prod)
+df = st.session_state["df_ftm"]        # per-user cumulative summaries
+
+# FTM raw event log — loader exists but no page loads it yet
+ensure_ftm_events_initialized()
+events = st.session_state["df_ftm_events"]
 ```
 
 Both guards delegate to the shared `_guard_init(init_fn, flag_key, label)` helper
@@ -167,6 +171,31 @@ in `data.py`, which runs the loader once per session and wraps failures in
 | `assessment_data_initialized` | Boolean guard for the assessment loader |
 | `df_ftm` | Flattened Feed the Monster summary DataFrame (may be empty) |
 | `ftm_data_initialized` | Boolean guard for the FTM loader |
+| `df_ftm_events` | Flattened FTM event log (`puzzle_completed` / `level_completed`) |
+| `ftm_events_initialized` | Boolean guard for the FTM event-log loader |
+
+# Feed the Monster page scope
+
+The FTM page filters to `firestore_timestamp >= 2026-07-29` (earlier rows
+predate the full summary field set) and `environment == "production"`. Both
+`df_ftm` and `df_ftm_events` get the identical filter so milestone counts and
+summary counts describe the same population.
+
+# Ad-optimization milestones
+
+The page reconstructs the Firebase Analytics conversion events **in FTM terms**,
+since Firebase is not a data source and the container-level `user_profiles`
+collection is not exported to BigQuery. `begin_play` and the four `play_*`
+thresholds are genuinely cross-app events, so the FTM-only versions are lower
+bounds.
+
+Seven of the nine are shown. `play_sessions_3` and `habit_4_days_week` are
+deliberately omitted: the event log carries no app-launch event (only
+`puzzle_completed` and `level_completed`), so sessions can only be reconstructed
+from a 30-minute inactivity gap, and a rolling 7-day habit window needs more
+history than the page's start date allows. Both become straightforward once
+`user_profiles` is exported. `data.py` keeps the event-log loader ready for
+that work.
 
 ---
 

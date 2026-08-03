@@ -295,3 +295,110 @@ def _init_ftm_data():
             flatten_ftm_df(df_raw) if not df_raw.empty else pd.DataFrame()
         )
         st.session_state["ftm_data_initialized"] = True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Feed the Monster event log  (direct BigQuery → df_ftm_events)
+# ══════════════════════════════════════════════════════════════════════════════
+
+FTM_EVENTS_TABLE = "ftm-b9d99.firestore_export.user_sessions_data_raw_latest"
+
+
+@st.cache_data(ttl="1d", show_spinner=False)
+def load_ftm_events_from_bq() -> pd.DataFrame:
+    """
+    Load the raw Feed the Monster event log straight from BigQuery.
+
+    `user_sessions_data` is the append-only event log shared with the assessment
+    app, so we filter to app_id = 'feed-the-monster' in SQL. It carries two
+    event types — `puzzle_completed` and `level_completed` — with no app-launch
+    event, so play sessions have to be reconstructed from event timestamps.
+
+    Roughly 10k rows, so a direct query is cheap.
+    """
+    _, bq_client = get_gcp_credentials()
+    query = f"""
+        SELECT document_id, timestamp, event_id, operation, data
+        FROM `{FTM_EVENTS_TABLE}`
+        WHERE JSON_VALUE(data, '$.app_id') = 'feed-the-monster'
+    """
+    df = bq_client.query(query).result().to_dataframe()
+    if "timestamp" in df.columns and "firestore_timestamp" not in df.columns:
+        df = df.rename(columns={"timestamp": "firestore_timestamp"})
+    return df
+
+
+def flatten_ftm_events_df(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Flatten the Feed the Monster event log JSON into columns.
+
+    Source JSON:
+        {
+            "app_id": "feed-the-monster", "collection": "user_sessions_data",
+            "cr_user_id": "...", "schema_version": "v1",
+            "created_at": "...", "synced_at": "...",
+            "data": {
+                "event_type": "puzzle_completed",   # or "level_completed"
+                "level": 0, "puzzle": 2,
+                "type": "LetterOnly", "lang": "arabic", "is_success": true
+            },
+            "metadata": {"environment": "production", "language": "Arabic",
+                         "country": "Egypt", "app_version": "v1.6.1"},
+            "attribution": {...}
+        }
+
+    `created_at` is populated on every row and is the event's own clock, so it
+    is what sessionization and active-day counts key off of — not the Firestore
+    write timestamp, which reflects sync time.
+    """
+    parsed = df_raw["data"].apply(_parse_json)
+    payload = parsed.apply(lambda d: d.get("data") or {})
+    meta = parsed.apply(lambda d: d.get("metadata") or {})
+
+    df = df_raw[["document_id", "firestore_timestamp",
+                 "event_id", "operation"]].copy()
+
+    # ── Top-level fields ──────────────────────────────────────────────────────
+    df["cr_user_id"] = parsed.apply(lambda d: d.get("cr_user_id"))
+    df["app_id"] = parsed.apply(lambda d: d.get("app_id"))
+    for col in ("created_at", "synced_at"):
+        df[col] = pd.to_datetime(
+            parsed.apply(lambda d, k=col: d.get(k)), utc=True, errors="coerce"
+        )
+    # Fall back to the Firestore write time on the rare row with no created_at.
+    df["event_timestamp"] = df["created_at"].fillna(df["firestore_timestamp"])
+
+    # ── data.* event payload ──────────────────────────────────────────────────
+    df["event_type"] = payload.apply(lambda d: d.get("event_type"))
+    df["level"] = pd.to_numeric(
+        payload.apply(lambda d: d.get("level")), errors="coerce"
+    ).astype("Int64")
+    df["puzzle"] = pd.to_numeric(
+        payload.apply(lambda d: d.get("puzzle")), errors="coerce"
+    ).astype("Int64")
+    df["puzzle_type"] = payload.apply(lambda d: d.get("type"))
+    df["lang"] = payload.apply(lambda d: d.get("lang"))
+    df["is_success"] = payload.apply(lambda d: d.get("is_success"))
+
+    # ── metadata.* ────────────────────────────────────────────────────────────
+    df["environment"] = meta.apply(lambda d: d.get("environment"))
+    df["language"] = meta.apply(lambda d: d.get("language"))
+    df["country"] = meta.apply(lambda d: d.get("country"))
+    df["app_version"] = meta.apply(lambda d: d.get("app_version"))
+
+    return df
+
+
+def ensure_ftm_events_initialized():
+    """Call before using df_ftm_events. Loads the FTM event log once."""
+    _guard_init(_init_ftm_events, "ftm_events_initialized",
+                "Feed the Monster event log")
+
+
+def _init_ftm_events():
+    with st.spinner("Loading Feed the Monster event log...", show_time=True):
+        df_raw = load_ftm_events_from_bq()
+        st.session_state["df_ftm_events"] = (
+            flatten_ftm_events_df(df_raw) if not df_raw.empty else pd.DataFrame()
+        )
+        st.session_state["ftm_events_initialized"] = True

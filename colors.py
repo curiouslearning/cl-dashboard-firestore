@@ -12,6 +12,21 @@ PALETTE = {
     "ink":      "#D6D0F0",   # cool lavender-grey
 }
 
+# Funnel stage fills — dark → focal → dark, mirroring the olive ramp used by
+# `create_engagement_figure` in cl-dashboard-internal so funnels read the same
+# across dashboards. Deliberately darker than PALETTE: stage labels sit inside
+# the bars, so the fills have to carry light text.
+FUNNEL_COLORS = [
+    "#3B2A6B",   # deepest violet
+    "#4C3688",
+    "#5F45A6",
+    "#7C5CBF",   # primary violet — focal stage
+    "#6B4EB0",
+    "#8E6FD0",
+    "#443173",
+    "#57408F",
+]
+
 # Metric display names used in the CHART (from long_df["metric_display"])
 CHART_METRIC_COLORS = {
     "Max Level Reached":        PALETTE["lavender"],

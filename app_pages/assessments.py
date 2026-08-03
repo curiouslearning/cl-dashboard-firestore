@@ -44,11 +44,7 @@ tile_specs = [
     ("Languages",         f"{unique_langs:,}",      ""),
     ("Activity Types",    f"{unique_types:,}",      ""),
 ]
-cols = st.columns(len(tile_specs))
-for i, (col, (label, value, sub)) in enumerate(zip(cols, tile_specs)):
-    bg = ui.TILE_GRADIENT[i % len(ui.TILE_GRADIENT)]
-    with col:
-        st.markdown(ui.tile_html(label, value, sub, bg=bg), unsafe_allow_html=True)
+st.markdown(ui.tile_row(tile_specs), unsafe_allow_html=True)
 
 # Shared color map — reused across charts that split by activity type
 activity_colors = {

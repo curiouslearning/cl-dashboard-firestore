@@ -4,11 +4,13 @@ icon = "🏠"
 is_section = true
 
 [[pages]]
-path = "app_pages/home.py"
-name = "Assessment Summary Data"
-icon = "📋"
-
-[[pages]]
 path = "app_pages/ftm.py"
 name = "Feed the Monster"
 icon = "👾"
+
+[[pages]]
+path = "app_pages/assessments.py"
+name = "Assessment Summary Data"
+icon = "📋"
+
+

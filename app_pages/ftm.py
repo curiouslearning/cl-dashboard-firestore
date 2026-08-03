@@ -18,27 +18,18 @@ if df_all.empty:
     st.info("No feed-the-monster rows found in `summary_data_raw_latest`.")
     st.stop()
 
-# -- Environment filter: production only --------------------------------------
-# The FTM summary feed flips on in production soon; this page reports on
-# production data. Until it's live, `production` is empty, so expose a toggle
-# (shown only while there are no production rows) to preview test data. Once
-# real production rows land, the toggle disappears and the page is prod-only.
-prod_mask = df_all["environment"] == "production"
-n_prod = int(prod_mask.sum())
-
-preview_test = False
-if n_prod == 0:
-    preview_test = st.toggle(
-        "Preview non-production data (production feed not live yet)",
-        value=False,
-        help="No production rows yet. Enable to inspect test-environment rows "
-             "while the feature is pre-launch.",
-    )
-
-df = df_all if preview_test else df_all[prod_mask]
+# -- Scope: date cutoff + production only --------------------------------------
+# Rows before START_DATE predate the full summary field set. firestore_timestamp
+# is used because it is populated on every row. Test and environment-less rows
+# are dropped so every number on this page is real production activity.
+START_DATE = pd.Timestamp("2026-07-29", tz="UTC")
+df = df_all[
+    (df_all["firestore_timestamp"] >= START_DATE)
+    & (df_all["environment"] == "production")
+]
 
 # -- Header -------------------------------------------------------------------
-ts = df["event_timestamp"].dropna() if not df.empty else df["event_timestamp"]
+ts = df["firestore_timestamp"]
 if not ts.empty:
     st.subheader(
         f"Feed the Monster:  {ts.min():%b %-d} - {ts.max():%b %-d, %Y}",
@@ -47,17 +38,11 @@ if not ts.empty:
 else:
     st.subheader("Feed the Monster", divider="violet")
 
-scope = "all environments (preview)" if preview_test else "production"
-st.caption(
-    f"Reporting on **{scope}** rows of `summary_data` where "
-    "`app_id = 'feed-the-monster'`. Charts below are provisional."
-)
-
-# -- Production-empty guard ---------------------------------------------------
+# -- Scope-empty guard --------------------------------------------------------
 if df.empty:
     st.info(
-        "No **production** rows yet — the Feed the Monster summary feed isn't "
-        "live in production. Enable the preview toggle above to inspect test data."
+        f"No production rows on or after {START_DATE:%b %-d, %Y}. Earlier rows "
+        "predate the full summary field set, and test rows are excluded."
     )
     st.stop()
 
@@ -81,68 +66,132 @@ tile_specs = [
     ("Play Time",        f"{play_hours:,.1f} h", "where recorded"),
     ("Max Level Reached", max_level_str,          ""),
 ]
-cols = st.columns(len(tile_specs))
-for i, (col, (label, value, sub)) in enumerate(zip(cols, tile_specs)):
-    bg = ui.TILE_GRADIENT[i % len(ui.TILE_GRADIENT)]
-    with col:
-        st.markdown(ui.tile_html(label, value, sub, bg=bg), unsafe_allow_html=True)
+st.markdown(ui.tile_row(tile_specs), unsafe_allow_html=True)
 
-# Short label for per-record charts (users repeat and ids are long)
+# Short label for chart hovers (raw ids are long)
 df = df.copy()
 df["user_short"] = df["cr_user_id"].str.slice(0, 10)
-df["record"] = df["user_short"] + " · #" + (df.groupby("cr_user_id").cumcount() + 1).astype(str)
 
-# -- Chart 1: Puzzle outcomes by record ---------------------------------------
-# success / failure are populated on every row, so this is the most reliable view.
-st.subheader("Puzzle Outcomes by Record", divider="violet")
+# -- Ad-optimization milestones -----------------------------------------------
+# Mirrors the one-time conversion events sent to Firebase Analytics (see
+# "Firebase Analytics — Ad-Optimization Milestones"). Firebase is not a source
+# here and the container-level `user_profiles` collection is not exported to
+# BigQuery yet, so every milestone is reconstructed **in Feed the Monster terms**
+# from summary_data. Where the real event is cross-app (begin_play, the play_*
+# thresholds), the FTM-only version is a lower bound.
+#
+# `play_sessions_3` and `habit_4_days_week` are deliberately omitted: both need
+# the event log, and neither is trustworthy yet — there is no app-launch event
+# to count, and a rolling 7-day window needs more history than this page covers.
+#
+# Milestones are per install, so totals are rolled up per cr_user_id first —
+# users with more than one summary doc must not count twice.
+st.subheader("Ad-Optimization Milestones", divider="violet")
 
-outcomes = (
-    df[["record", "puzzle_success", "puzzle_failure"]]
-    .melt(id_vars="record", var_name="outcome", value_name="count")
+per_user = df.groupby("cr_user_id").agg(
+    max_level=("highest_level_completed", "max"),
+    total_sec=("time_spent_total_sec", "sum"),
 )
-outcomes["outcome"] = outcomes["outcome"].map(
-    {"puzzle_success": "Solved", "puzzle_failure": "Failed"}
-)
-order = df.sort_values("puzzles_completed", ascending=True)["record"].tolist()
+n_users = len(per_user)
 
-fig_out = px.bar(
-    outcomes,
-    x="count",
-    y="record",
-    color="outcome",
-    orientation="h",
-    barmode="stack",
-    category_orders={"record": order, "outcome": ["Solved", "Failed"]},
-    color_discrete_map={"Solved": PALETTE["plum"], "Failed": PALETTE["ink"]},
-    labels={"count": "Puzzles", "record": "User · record", "outcome": "Outcome"},
-)
-fig_out.update_layout(
-    plot_bgcolor="rgba(0,0,0,0)",
-    paper_bgcolor="rgba(0,0,0,0)",
-    legend_title_text="Outcome",
-    height=max(280, 26 * df["record"].nunique() + 80),
-    margin=dict(l=10, r=10, t=10, b=40),
-)
-st.plotly_chart(fig_out, width="stretch")
+# The milestones are two independent tracks — level progress and play time —
+# so they get one funnel each. Interleaved they do not taper (ftm_level_25 sits
+# below play_10_min); split by track, each is naturally monotonic and its
+# "% of previous" reads as a real step-down.
+#
+# `begin_play` heads both funnels as the shared baseline. Every user in this
+# frame has an FTM summary record, so it is 100% by construction.
+BEGAN_PLAY = ("begin_play", "Began play", pd.Series(True, index=per_user.index))
 
-# -- Chart 2: Volume vs Success Rate ------------------------------------------
+LEVEL_MILESTONES = [
+    BEGAN_PLAY,
+    ("ftm_level_1_complete", "FTM Level 1 completed", per_user["max_level"] >= 1),
+    ("ftm_level_25", "FTM Level 25 reached", per_user["max_level"] >= 25),
+]
+
+PLAY_MILESTONES = [
+    BEGAN_PLAY,
+    ("play_10_min",   "Play time ≥ 10 min",   per_user["total_sec"] >= 600),
+    ("play_1_hour",   "Play time ≥ 1 hour",   per_user["total_sec"] >= 3_600),
+    ("play_3_hours",  "Play time ≥ 3 hours",  per_user["total_sec"] >= 10_800),
+    ("play_10_hours", "Play time ≥ 10 hours", per_user["total_sec"] >= 36_000),
+]
+
+
+def milestone_frame(spec) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "event": event,
+                "milestone": label,
+                "users": int(reached.sum()),
+                "pct": reached.sum() / n_users if n_users else 0.0,
+            }
+            for event, label, reached in spec
+        ]
+    )
+
+
+level_ms = milestone_frame(LEVEL_MILESTONES)
+play_ms = milestone_frame(PLAY_MILESTONES)
+
+# Matching heights keep the two funnels aligned despite the differing stage counts.
+col_level, col_play = st.columns(2)
+with col_level:
+    st.markdown(ui.section_header("Level Progress"), unsafe_allow_html=True)
+    st.plotly_chart(
+        ui.funnel_figure(level_ms["milestone"].tolist(), level_ms["users"].tolist()),
+        width="stretch",
+    )
+with col_play:
+    st.markdown(ui.section_header("Play Time"), unsafe_allow_html=True)
+    st.plotly_chart(
+        ui.funnel_figure(play_ms["milestone"].tolist(), play_ms["users"].tolist()),
+        width="stretch",
+    )
+
+st.caption(
+    f"Share of the {n_users:,} production users in this window who have crossed "
+    "each threshold, reconstructed in Feed the Monster terms. Both funnels start "
+    "from the same `begin_play` baseline. `begin_play` and the `play_*` "
+    "thresholds fire in-app on activity across **all** apps, so the FTM-only "
+    "figures here are a lower bound until `user_profiles` is exported to BigQuery."
+)
+
+with st.expander("How each milestone is derived"):
+    st.markdown(
+        """
+| Event | FTM reconstruction |
+| --- | --- |
+| `begin_play` | has an FTM summary record — 100% by construction, since the page's user base *is* users with FTM activity |
+| `ftm_level_1_complete` | `highest_level_completed` ≥ 1 |
+| `ftm_level_25` | `highest_level_completed` ≥ 25 |
+| `play_10_min` … `play_10_hours` | summed `time_spent_total_second` ≥ threshold — **FTM time only**, not cross-app |
+
+Two spec milestones are not shown. `play_sessions_3` needs app-launch counts,
+but the event log carries only `puzzle_completed` and `level_completed`, so any
+figure would be reconstructed play sessions rather than true launches.
+`habit_4_days_week` needs more history than this page covers — a rolling 7-day
+window cannot fill up yet. Both become straightforward once `user_profiles` is
+exported to BigQuery.
+"""
+    )
+
+# -- Chart: Volume vs Success Rate --------------------------------------------
 st.subheader("Volume vs Success Rate", divider="violet")
 
-env_colors = {"test": PALETTE["violet"], "production": PALETTE["plum"]}
+# Every row is production now, so there is nothing to split by color.
 scatter_df = df.dropna(subset=["puzzle_success_pct"]).copy()
-scatter_df["environment"] = scatter_df["environment"].fillna("unknown")
 
 fig_sc = px.scatter(
     scatter_df,
     x="puzzles_completed",
     y="puzzle_success_pct",
-    color="environment",
-    color_discrete_map={**env_colors, "unknown": PALETTE["lilac"]},
+    color_discrete_sequence=[PALETTE["plum"]],
     hover_data={"user_short": True, "language": True, "country": True},
     labels={
         "puzzles_completed": "Puzzles Completed",
         "puzzle_success_pct": "Success Rate",
-        "environment": "Environment",
         "user_short": "User",
         "language": "Language",
         "country": "Country",
@@ -155,54 +204,13 @@ fig_sc.update_layout(
     yaxis_range=[0, 1.02],
     xaxis_title="Puzzles Completed",
     yaxis_title="Success Rate",
-    legend_title_text="Environment",
+    showlegend=False,
 )
 st.plotly_chart(fig_sc, width="stretch")
 
-# -- Chart 3: Level progression -----------------------------------------------
-# levels_completed / highest_level_completed present on ~2/3 of rows.
-st.subheader("Level Progression by Record", divider="violet")
-
-lvl = df.dropna(subset=["levels_completed", "highest_level_completed"]).copy()
-if lvl.empty:
-    st.caption("No rows carry level-progression fields yet.")
-else:
-    lvl_long = (
-        lvl[["record", "levels_completed", "highest_level_completed"]]
-        .melt(id_vars="record", var_name="metric", value_name="level")
-    )
-    lvl_long["metric"] = lvl_long["metric"].map({
-        "levels_completed": "Levels Completed",
-        "highest_level_completed": "Highest Level Reached",
-    })
-    lvl_order = lvl.sort_values("levels_completed")["record"].tolist()
-    fig_lvl = px.bar(
-        lvl_long,
-        x="level",
-        y="record",
-        color="metric",
-        orientation="h",
-        barmode="group",
-        category_orders={"record": lvl_order},
-        color_discrete_map={
-            "Levels Completed": PALETTE["plum"],
-            "Highest Level Reached": PALETTE["violet"],
-        },
-        labels={"level": "Level", "record": "User · record", "metric": "Metric"},
-    )
-    fig_lvl.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        legend_title_text="",
-        height=max(280, 26 * lvl["record"].nunique() + 80),
-        margin=dict(l=10, r=10, t=10, b=40),
-    )
-    st.plotly_chart(fig_lvl, width="stretch")
-
-# -- Raw data + field completeness --------------------------------------------
-st.subheader("Flattened Records", divider="violet")
-
-display_cols = [
+# -- Field completeness --------------------------------------------------------
+# How complete is each field? Surfaces the sparse metadata/attribution blocks.
+tracked_cols = [
     "cr_user_id", "operation", "environment", "language", "country",
     "highest_level_completed", "levels_completed",
     "puzzle_success", "puzzle_failure", "puzzles_completed", "puzzle_success_pct",
@@ -212,16 +220,10 @@ display_cols = [
     "created_at", "updated_at", "synced_at", "event_timestamp",
     "document_id", "event_id",
 ]
-display_cols = [c for c in display_cols if c in df.columns]
-st.dataframe(
-    df[display_cols].sort_values("event_timestamp", ascending=False, na_position="last"),
-    width="stretch",
-    hide_index=True,
-)
+tracked_cols = [c for c in tracked_cols if c in df.columns]
 
-# How complete is each field? Surfaces the sparse metadata/attribution blocks.
 completeness = (
-    df[display_cols].notna().sum()
+    df[tracked_cols].notna().sum()
     .rename("populated")
     .to_frame()
 )
