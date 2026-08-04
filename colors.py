@@ -27,6 +27,21 @@ FUNNEL_COLORS = [
     "#57408F",
 ]
 
+# Sequential ramp for the choropleth. PALETTE alone is too pale to separate a
+# country with 3 users from one with 160, so the light end comes from PALETTE and
+# the dark end from FUNNEL_COLORS — the same violets, stretched over more range.
+# The lightest stop is a visible tint, not PALETTE["dusk"] — countries with no
+# users are drawn white, and a one-user country has to read as different.
+MAP_SCALE = [
+    PALETTE["lavender"],
+    PALETTE["lilac"],
+    PALETTE["violet"],
+    PALETTE["plum"],
+    "#7C5CBF",            # primary violet
+    "#5F45A6",
+    "#3B2A6B",            # deepest violet
+]
+
 # Metric display names used in the CHART (from long_df["metric_display"])
 CHART_METRIC_COLORS = {
     "Max Level Reached":        PALETTE["lavender"],

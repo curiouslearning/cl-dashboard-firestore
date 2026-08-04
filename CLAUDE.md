@@ -32,7 +32,7 @@ colors.py                      # Global color palette (Lavender Dusk theme) + FU
 ui.py                          # CSS injection + tile / section-header / funnel renderers
 app_pages/
 assessments.py               # Assessment summary — tiles + assessment charts
-ftm.py                       # Feed the Monster — tiles + milestone funnels + scatter
+ftm.py                       # Feed the Monster — tiles + engagement funnels + scatter
 .streamlit/
 config.toml                  # Theme configuration
 pages.toml                   # Navigation structure
@@ -187,10 +187,30 @@ predate the full summary field set) and `environment == "production"` (drops
 test and environment-less rows). Apply the identical filter to any dataset added
 to this page, so every number describes the same population.
 
-Page sections: summary tiles → milestone funnels → volume-vs-success scatter →
-field completeness.
+Page sections: summary tiles → world map → engagement funnels →
+volume-vs-success scatter → field completeness.
 
-# Ad-optimization milestones
+The map is a `px.choropleth` (`locationmode="country names"`, `MAP_SCALE` ramp)
+shaded by unique users, modeled on `stats_by_country_map` in cl-data-dashboard.
+Hovering a country shows that country's own summary tiles: `summary_stats()` and
+`tile_specs_for()` compute the tile row and every per-country hover card, so the
+two cannot drift — a tile added to `tile_specs_for` appears on the map for free,
+scoped to that country's rows. The Readers Acquired tile thresholds per-user
+`highest_level_completed` ≥ 25, the same rule as the `ftm_level_25` funnel stage,
+so the page-level tile always equals that stage over the `begin_play` baseline. Rows with a null or `"unknown"` country cannot be placed and
+are reported in the caption. `COUNTRY_ALIASES` remaps spellings Natural Earth
+does not use (Plotly drops unmatched names silently rather than erroring).
+
+Sidebar filters (Language, Country) narrow the scoped frame **before** any
+figure is computed, so every section describes the same filtered population.
+Each defaults to `"All"`, and its options come from the scoped rows — values
+that appear only in test or pre-cutoff data are never offered. Add new filters
+to the same `active_filters` block so they apply everywhere at once.
+
+# Engagement funnels
+
+Rendered under the heading "Engagement Funnels"; the underlying stages are still
+the ad-optimization milestones, named for the Firebase Analytics events.
 
 The page reconstructs the Firebase Analytics conversion events **in FTM terms**,
 since Firebase is not a data source and the container-level `user_profiles`
