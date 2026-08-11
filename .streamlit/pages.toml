@@ -13,4 +13,9 @@ path = "app_pages/assessments.py"
 name = "Assessment Summary Data"
 icon = "📋"
 
+[[pages]]
+path = "app_pages/comparison.py"
+name = "Assessment × FTM"
+icon = "🔀"
+
 

@@ -2,11 +2,12 @@
 
 # Project Overview
 
-from data import ensure_data_initialized
-from settings import initialize
 Streamlit analytics dashboard for the ** Curious Learning Assessment app**.
-Data originates from **Firestore**, is exported to ** BigQuery**, cached as
-**GCS parquet files**, and loaded into Streamlit session state at startup.
+Data originates from **Firestore**, is exported to ** BigQuery**, and is queried
+directly into Streamlit session state at startup. This dashboard's datasets are
+small — hundreds to tens of thousands of rows, not the millions the other
+Curious Learning dashboards handle — so every loader queries BigQuery live.
+There is no parquet cache and no GCS dependency.
 
 ---
 
@@ -14,8 +15,7 @@ Data originates from **Firestore**, is exported to ** BigQuery**, cached as
 
 - **Python ** 3.12
 - **Streamlit ** 1.48
-- **BigQuery ** + **GCS parquet ** as data backend
-- **gcsfs ** for GCS access
+- **BigQuery ** as the data backend (queried directly, no cache layer)
 - **Pandas ** for all data manipulation
 - **Plotly ** for charts(when added)
 - **st_pages ** for navigation(`get_nav_from_toml`)
@@ -62,28 +62,34 @@ Use `divider = "violet"` in `st.subheader()` to match the theme.
 
 # Data Source
 
-# Firestore → BigQuery table
+# Firestore → BigQuery tables
 ```
-ftm-b9d99.firestore_export.user_sessions_data_raw_latest
-```
-
-# GCS parquet export (run as scheduled query)
-```sql
-EXPORT DATA OPTIONS(
-    uri='gs://user_data_parquet_cache/assessment_sessions_*.parquet',
-    format='PARQUET',
-    overwrite=true
-) AS
-SELECT * FROM `ftm-b9d99.firestore_export.user_sessions_data_raw_latest`
+ftm-b9d99.firestore_export.user_sessions_data_raw_latest   # event log
+ftm-b9d99.firestore_export.summary_data_raw_latest         # per-user summaries
 ```
 
-# GCS load pattern in `data.py`
+**Every collection is shared across app_ids.** `user_sessions_data` holds both
+assessment `activity_completed` rows and Feed the Monster `puzzle_completed` /
+`level_completed` rows; `summary_data` holds both apps' summaries. Filtering on
+`app_id` is not a nicety — it is what keeps one app's rows out of another app's
+DataFrame, and it belongs in SQL.
+
+All loaders go through one helper, which applies that filter:
+
 ```python
-load_parquet_from_gcs("user_data_parquet_cache/assessment_sessions_*.parquet")
+_load_firestore_rows(table, app_id)   # SELECT ... WHERE JSON_VALUE(data,'$.app_id') = app_id
 ```
 
-The loader automatically renames `timestamp` → `firestore_timestamp` if needed,
-since `SELECT * ` preserves the original Firestore column name.
+It renames `timestamp` → `firestore_timestamp`, freeing `timestamp` to mean the
+event's own clock inside the JSON payload.
+
+**Why no parquet cache.** The assessment loader used to read a GCS parquet
+export of `user_sessions_data_raw_latest`. That export was `SELECT *` with no
+app_id filter, so once FTM began writing to the same collection the file became
+~97% FTM rows (28,788 of 29,710) and the assessment page counted every one of
+them as an assessment — reporting 29,710 assessments across 1,616 users instead
+of the real 934 across 497. Direct queries removed that whole class of problem.
+Do not reintroduce a cache layer without an app_id filter in the export itself.
 
 ---
 
@@ -111,8 +117,8 @@ since `SELECT * ` preserves the original Firestore column name.
 
 Each row = one completed assessment. `activity_type` tells you which one
 (`letter-sounds` or `sight-words`). The dashboard uses "assessment" everywhere
-in user-facing text and internal keys; "session" survives only in upstream
-resource names (`user_sessions_data_raw_latest`, `assessment_sessions_*.parquet`).
+in user-facing text and internal keys; "session" survives only in the upstream
+resource name (`user_sessions_data_raw_latest`).
 
 | Column | Source | Notes |
 |--- | --- | ---|
@@ -133,11 +139,16 @@ resource names (`user_sessions_data_raw_latest`, `assessment_sessions_*.parquet`
 | `time_spent_sec` | derived | `time_spent_ms / 1000` |
 | `score_pct` | derived | `score / max_score`, null if max_score = 0 |
 
-# Key facts about the data (as of Apr 2026)
-- 103 rows total(80 CREATE, 23 UPDATE)
-- 86 unique `cr_user_id` values — some users have multiple rows
+# Key facts about the data (as of Aug 2026)
+- 934 rows, 497 unique `cr_user_id` values — some users have multiple rows
 - Multiple rows per user are retained(not deduplicated)
-- 5 languages, 2 activity types(`letter-sounds`, `sight-words`)
+- 6 languages, 2 activity types(`letter-sounds`, `sight-words`)
+- Assessment rows carry **no `metadata.environment`** — there is no way to
+  separate test from production traffic on this dataset
+- `event_timestamp` (from the JSON's inner `timestamp`) is populated on only
+  **551 of 934** rows. Charts that `dropna` on it silently describe ~60% of the
+  data — the dumbbell chart on the assessment page sees 71 repeat-take pairs
+  where the full data supports 134. `firestore_timestamp` is on every row.
 
 ---
 
@@ -160,14 +171,21 @@ initialize()
 ensure_ftm_data_initialized()
 df = st.session_state["df_ftm"]        # per-user cumulative summaries
 
+# Assessment × FTM comparison page
+initialize()
+ensure_comparison_data_initialized()
+df = st.session_state["df_comparison"]  # one row per user, with a cohort label
+
 # FTM raw event log — loader exists but no page loads it yet
 ensure_ftm_events_initialized()
 events = st.session_state["df_ftm_events"]
 ```
 
-Both guards delegate to the shared `_guard_init(init_fn, flag_key, label)` helper
-in `data.py`, which runs the loader once per session and wraps failures in
-`st.error` + `st.stop()`.
+Every guard delegates to the shared `_guard_init(init_fn, flag_key, label)`
+helper in `data.py`, which runs the loader once per session and wraps failures
+in `st.error` + `st.stop()`. Every loader is `@st.cache_data(ttl="1d")` and
+fetches from BigQuery through `_load_firestore_rows`, except the comparison
+loader, which runs its own `COMPARISON_SQL` because it joins two tables.
 
 # Session state keys
 
@@ -179,6 +197,8 @@ in `data.py`, which runs the loader once per session and wraps failures in
 | `ftm_data_initialized` | Boolean guard for the FTM loader |
 | `df_ftm_events` | Flattened FTM event log (`puzzle_completed` / `level_completed`) |
 | `ftm_events_initialized` | Boolean guard for the FTM event-log loader |
+| `df_comparison` | One row per user across both apps, with a `cohort` label |
+| `comparison_data_initialized` | Boolean guard for the comparison loader |
 
 # Feed the Monster page scope
 
@@ -239,6 +259,103 @@ event-log loader ready for that work.
 
 ---
 
+# Assessment × FTM comparison page
+
+`app_pages/comparison.py` — how the two user bases relate, and whether FTM
+engagement travels with assessment success.
+
+`COMPARISON_SQL` in `data.py` does the join **in BigQuery**, unlike the other
+loaders, because it spans two tables: assessment rows from
+`user_sessions_data_raw_latest` and FTM summaries from `summary_data_raw_latest`,
+`FULL OUTER JOIN`ed on `cr_user_id` into cohorts `Both` / `Assessment only` /
+`FTM only`. Cohort membership and metrics come from different places on the FTM
+side — a user counts as an FTM user if they appear in *either* FTM table, but
+gameplay numbers exist only in `summary_data`, so a few users are FTM members
+whose metrics are unknown rather than zero.
+
+Two scope filters make the cohorts comparable. Both discard most of the data on
+purpose, and removing either one makes the page tell a flattering lie:
+
+- **Date — both sides start at `COMPARISON_START_DATE` (2026-08-01)**, applied
+  in SQL, matching the FTM page's cutoff. FTM wrote nothing to Firestore before
+  then, so an earlier assessment user would be classed "Assessment only" because
+  of when tracking started, not because they didn't play. The filter is on
+  `timestamp` (write time) — the only clock populated on every row of both
+  tables.
+- **Language — only languages present in both apps**, computed from the
+  date-scoped data by `shared_languages()`, never hardcoded (the shared set
+  changes as data lands). Every FTM language is playable but assessments cover
+  far fewer, so an FTM user with no assessment in their language never declined
+  to assess. `normalize_language()` folds case and punctuation
+  (`BrazilianPortuguese` ≡ `Brazilianportuguese`); `LANGUAGE_ALIASES` handles
+  word-order differences (`EnglishWestAfrican` ≡ `west-african-english`).
+  **Regional variants are deliberately not folded** — FTM's `IndianEnglish` and
+  `AustralianEnglish` are separate content from the assessment's `english`, and
+  merging them would invent an overlap that doesn't exist.
+
+**FTM language is backfilled from the event log, and must stay that way.**
+`metadata.language` only ships from container version **2.34.5** — rows from
+2.34.4 have a summary document with no language on it (nothing to do with
+`created_at`, which is present on those rows). Around 15% of FTM users are
+affected, and they are *not* a random slice: they average roughly double the
+max level of users who carry the field, so dropping them would strip the most
+engaged players out of the FTM cohort. `COMPARISON_SQL` coalesces
+`metadata.language` with `data.lang` from `user_sessions_data`, which is already
+lowercase and covers all but a handful. This also changes which languages
+qualify as shared — Bangla and West African English only appear on both sides
+once the backfill runs. `f_language_backfilled` flags the recovered rows.
+
+Two further constraints:
+
+- **The overlap is ~12 users** after both filters (from ~24 unfiltered).
+  Nothing here reaches significance; the page is sized to test whether the
+  question is worth pursuing. Keep the sample-size warning prominent.
+- **No `environment` filter.** Assessment rows carry no `metadata.environment`
+  at all, so the FTM page's `== "production"` filter would drop every assessment
+  user. Both apps are shown unfiltered, test rows included. Do not "fix" this by
+  copying the FTM filter over.
+- **Causal direction is unrecoverable.** Firestore `timestamp` is write time,
+  and the two exports began on different dates (assessment ~Mar 2026, FTM
+  ~Jun 2026), so ordering reflects export start dates, not user behavior.
+  `created_at` covers only ~40% of assessment rows and starts in June, so it
+  does not rescue this. The `order_of_use` column is surfaced as "First Record"
+  and must not be presented as which app the user played first.
+
+`a_score_pct` piles up at 0% and 100% because `max_score` takes very few
+distinct values — prefer medians, and Spearman over Pearson.
+
+**`cr_user_id` encodes the account creation time**, so tenure is derivable:
+26 random characters, then an unpadded local-time
+`${{year}}${{month}}${{day}}${{hours}}${{minutes}}${{seconds}}` (a few ids use epoch
+millis instead). Unpadded means digit widths vary and a string can have several
+valid readings, so `parse_install_date()` accepts a candidate only if
+re-encoding reproduces the id, and rejects any that postdates the user's first
+record. **The ceiling needs a ±14h timezone slack** — the id's clock is local
+while records are UTC, and without the slack every user east of UTC fails to
+parse (coverage drops from 97% to 66%). Where readings remain ambiguous (~25%)
+the latest is taken. `install_age_days` runs install → last record, clamped at 0.
+
+**`highest_level_completed` is install-age confounded; the counters are not.**
+The date filter scopes which *users* appear but cannot rescope FTM's metrics.
+Measured over the window, `puzzles_completed` tracks in-window `puzzle_completed`
+events closely (avg 22.4 summary vs 23.0 events), but `highest_level_completed`
+sits well above the in-window max and the gap grows on older container versions
+(2.34.5: 7.5 vs 5.2 in-window; 2.34.4: 14.7 vs 11.6; no-metadata: 19.3 vs 11.7).
+It is a lifetime high-water mark predating FTM's Firestore export, which only
+begins June 2026 — the earlier play backing those levels has no records at all.
+With `install_age_days` this is measured rather than inferred: across FTM users
+in the frame, tenure correlates with max level at ρ ≈ 0.57 but with puzzles at
+only ρ ≈ 0.14, and median max level climbs 1 → 4 → 7 → 12 across tenure buckets
+while median puzzles does not. Use puzzles, play time or success rate for
+engagement comparisons. `METRIC_CAVEATS` on the page surfaces this whenever max
+level is the selected metric.
+
+Page prose is deliberately terse — one scope caption, one overlap warning, one
+"Notes & caveats" expander. Detail belongs in the expander or in this file, not
+stacked above the charts.
+
+---
+
 # GCP Credentials
 
 Credentials are fetched from **Secret Manager ** at startup:
@@ -248,7 +365,8 @@ projects/405806232197/secrets/service_account_json/versions/latest
 
 The service account needs:
 - BigQuery read on `ftm-b9d99`
-- GCS read on `user_data_parquet_cache`
+(GCS read on `user_data_parquet_cache` is no longer needed — the parquet cache
+was removed in favor of direct queries.)
 
 `get_gcp_credentials()` is `@st.cache_resource(ttl="1d")` — returns
 `(gcp_credentials, bq_client)`.
